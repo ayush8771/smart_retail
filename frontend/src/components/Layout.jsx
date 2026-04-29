@@ -14,23 +14,24 @@ const Layout = () => {
         socket.on('connect', () => setSystemStatus('Online'));
         socket.on('disconnect', () => setSystemStatus('Offline'));
 
-        // 2. Listen for the exact events emitted by your backend/lib/socket.js
-        const handleNewAlert = (data, type) => {
+        // 2. Listen for the NEW predictive event emitted by detect.js
+        const handleNewAlert = (data) => {
             const newAlert = {
-                id: Date.now() + Math.random(), // Unique ID for the UI
-                type: type, // 'critical' or 'warning'
-                shelfId: data.shelfId,
-                message: data.message,
-                occupancy: data.occupancy_pct,
-                time: new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                id: Date.now() + Math.random(),
+                type: data.priority, // 'critical' or 'warning'
+                shelfId: data.shelf_id,
+                productName: data.product_name,
+                hoursLeft: Number(data.hours_until_stockout).toFixed(1),
+                message: `AI Forecast: ${data.product_name} will run out of stock in ~${Number(data.hours_until_stockout).toFixed(1)} hours. (Demand: ${Number(data.predicted_daily_demand).toFixed(1)}/day)`,
+                time: new Date(data.forecasted_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
 
             // Push the new alert to the screen
             setAlerts((prev) => [newAlert, ...prev]);
         };
 
-        socket.on('alert:critical', (data) => handleNewAlert(data, 'critical'));
-        socket.on('alert:warning', (data) => handleNewAlert(data, 'warning'));
+        // The Magic Link: Matching the new event name from your backend!
+        socket.on('restock_alert', handleNewAlert);
 
         return () => {
             socket.disconnect();
@@ -39,13 +40,10 @@ const Layout = () => {
 
     // --- Action Handlers ---
     const handleIgnore = (alertId) => {
-        // Dismiss the notification from the screen
         setAlerts((prev) => prev.filter(alert => alert.id !== alertId));
     };
 
     const handleRestock = (alertId) => {
-        // Dismiss the notification AND instantly route the manager to the Shelf Management page
-        // where the AI has already queued up the specific restock task!
         setAlerts((prev) => prev.filter(alert => alert.id !== alertId));
         navigate('/shelves');
     };
@@ -53,7 +51,7 @@ const Layout = () => {
     const navItems = [
         { path: '/', label: 'Dashboard' },
         { path: '/shelves', label: 'Shelf Management' },
-        { path: '/detect', label: 'Camera Diagnostics' }, // Renamed slightly since it's just for testing now
+        { path: '/detect', label: 'Camera Diagnostics' },
         { path: '/analytics', label: 'Analytics' },
     ];
 
@@ -84,11 +82,9 @@ const Layout = () => {
 
             {/* Main Workspace Area */}
             <main className="flex-1 flex flex-col overflow-hidden">
-                {/* Top Header */}
                 <header className="bg-white shadow-sm border-b border-gray-200 px-8 py-4 flex items-center justify-between z-10">
                     <h2 className="text-lg font-medium text-gray-700">Manager Portal</h2>
                     <div className="flex items-center gap-4">
-                        {/* Background AI Status Indicator */}
                         <div className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 ${systemStatus === 'Online' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
                             }`}>
                             <span className={`h-2 w-2 rounded-full ${systemStatus === 'Online' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
@@ -97,13 +93,12 @@ const Layout = () => {
                     </div>
                 </header>
 
-                {/* Dynamic Page Content */}
                 <div className="flex-1 overflow-auto p-8 relative">
                     <Outlet />
                 </div>
             </main>
 
-            {/* --- NEW: Global Floating Alert Overlay --- */}
+            {/* --- Global Floating Alert Overlay --- */}
             <div className="absolute bottom-8 right-8 z-50 flex flex-col gap-4 max-w-sm w-full pointer-events-none">
                 {alerts.map((alert) => (
                     <div
@@ -118,11 +113,15 @@ const Layout = () => {
                                 <h4 className={`font-bold text-sm uppercase tracking-wide ${alert.type === 'critical' ? 'text-red-600' : 'text-amber-600'}`}>
                                     {alert.type === 'critical' ? 'Stockout Imminent' : 'Low Stock Warning'}
                                 </h4>
-                                <p className="font-mono text-xs text-gray-400 mt-1">{alert.time} • Shelf {alert.shelfId}</p>
+                                <p className="font-mono text-xs text-gray-400 mt-1">{alert.time} • {alert.shelfId}</p>
                             </div>
-                            <span className={`text-lg font-black ${alert.type === 'critical' ? 'text-red-500' : 'text-amber-500'}`}>
-                                {alert.occupancy}%
-                            </span>
+                            {/* Now displaying the predictive hours left! */}
+                            <div className="text-right">
+                                <span className={`text-xl font-black ${alert.type === 'critical' ? 'text-red-500' : 'text-amber-500'}`}>
+                                    {alert.hoursLeft}h
+                                </span>
+                                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">Remaining</p>
+                            </div>
                         </div>
 
                         <p className="text-gray-700 text-sm mt-3 font-medium leading-relaxed">
