@@ -1,2 +1,4 @@
 
 /venv/
+/ai_service/venv/
+*.pyc

@@ -9,5 +9,5 @@ pillow==10.4.0
 python-multipart==0.0.9
 pydantic==2.7.4
 scikit-learn==1.5.1
-matplotlib==3.9.1
+matplotlib==3.8.4
 requests==2.32.3

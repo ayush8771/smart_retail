@@ -5,6 +5,9 @@ const dotenv = require('dotenv');
 const { Server } = require('socket.io');
 const { PrismaClient } = require('@prisma/client');
 
+// 👇 CHANGE HERE
+const { router: detectRouter, setIO } = require('./routes/detect');
+
 dotenv.config();
 
 const app = express();
@@ -22,13 +25,15 @@ const io = new Server(server, {
 app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json());
 
-// make io and prisma accessible in all routes
-app.set('io', io);
+// (optional) keep prisma global
 app.set('prisma', prisma);
+
+// 👇 CRITICAL LINE
+setIO(io);
 
 // routes
 app.use('/api/shelves', require('./routes/shelves'));
-app.use('/api/detect', require('./routes/detect'));
+app.use('/api/detect', detectRouter);  // 👈 changed
 app.use('/api/restock', require('./routes/restock'));
 app.use('/api/analytics', require('./routes/analytics'));
 
