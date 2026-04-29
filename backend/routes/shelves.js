@@ -70,4 +70,40 @@ router.get('/:shelfId', async (req, res) => {
     }
 });
 
+// POST /api/shelves - Create a new shelf
+router.post('/', async (req, res) => {
+    try {
+        const prisma = req.app.get('prisma');
+        const { id, name } = req.body;
+
+        const newShelf = await prisma.shelf.create({
+            data: { id, name }
+        });
+
+        res.json(newShelf);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to create shelf' });
+    }
+});
+
+// PUT /api/shelves/:id - Update an existing shelf
+router.put('/:id', async (req, res) => {
+    try {
+        const prisma = req.app.get('prisma');
+        const { id } = req.params;
+        const { name } = req.body;
+
+        const updatedShelf = await prisma.shelf.update({
+            where: { id },
+            data: { name }
+        });
+
+        res.json(updatedShelf);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to update shelf' });
+    }
+});
+
 module.exports = router;
