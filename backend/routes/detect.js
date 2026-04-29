@@ -1,104 +1,134 @@
 const express = require('express');
-const multer = require('multer');
 const router = express.Router();
-const { detectShelf, forecastStock } = require('../lib/fastapi');
-const { emitCriticalAlert, emitWarningAlert, emitShelfUpdated } = require('../lib/socket');
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
 
-const upload = multer({ storage: multer.memoryStorage() });
+// io is injected from server.js/app.js to allow real-time broadcasts
+let io;
+const setIO = (socketIO) => {
+    io = socketIO;
+};
 
-// POST /api/detect/:shelfId
-router.post('/:shelfId', upload.single('file'), async (req, res) => {
-    const prisma = req.app.get('prisma');
-    const io = req.app.get('io');
-    const { shelfId } = req.params;
+/**
+ * POST /api/detect/alert
+ * This is the ENDPOINT the FastAPI (AI Service) calls after running Prophet.
+ */
+router.post('/alert', async (req, res) => {
+    const {
+        product_id,           // e.g., 'patanjali_atta_noodles'
+        product_name,
+        shelf_id,
+        hours_until_stockout, // From Prophet
+        priority,             // 'critical' or 'warning'
+        current_stock,
+        predicted_daily_demand,
+        forecasted_at,
+        bbox,
+    } = req.body;
 
     try {
-        // 1. send image to FastAPI YOLO
-        const detection = await detectShelf(
-            shelfId,
-            req.file.buffer,
-            req.file.mimetype
-        );
-
-        // 2. save detection to DB
-        await prisma.detection.create({
-            data: {
-                shelf_id: shelfId,
-                occupancy_pct: detection.occupancy_pct,
-                empty_zones: detection.empty_zones,
-                status: detection.status,
-                confidence: detection.confidence
-            }
+        // 1. Database Update: Upsert into the Restock Queue
+        const existing = await prisma.restockQueue.findFirst({
+            where: { product_id, resolved: false },
         });
 
-        // 3. emit shelf updated to frontend
-        emitShelfUpdated(io, shelfId, detection.occupancy_pct, detection.status);
+        // Calculate recommended restock quantity (3-day safety buffer)
+        const recommended_qty = Math.ceil(predicted_daily_demand * 3);
 
-        // 4. if critical or warning → trigger forecast per product in empty zones
-        if (detection.status === 'critical' || detection.status === 'warning') {
-            const products = await prisma.product.findMany({
-                where: { shelf_id: shelfId },
-                include: {
-                    inventory: true,
-                    sales: {
-                        orderBy: { sold_at: 'desc' },
-                        take: 90
-                    }
-                }
+        if (existing) {
+            await prisma.restockQueue.update({
+                where: { id: existing.id },
+                data: {
+                    priority,
+                    days_to_stockout: parseFloat((hours_until_stockout / 24).toFixed(2)),
+                    recommended_qty,
+                    reason: `AI Forecast: ~${hours_until_stockout.toFixed(1)}h left. Demand: ${predicted_daily_demand.toFixed(1)}/day`,
+                },
             });
-
-            for (const product of products) {
-                const currentStock = product.inventory?.current_stock ?? 0;
-
-                // build sales history for Prophet
-                const salesHistory = product.sales.map((s) => ({
-                    ds: s.sold_at.toISOString().split('T')[0],
-                    y: s.quantity_sold
-                }));
-
-                // skip forecast if no sales history
-                if (salesHistory.length < 7) continue;
-
-                const forecast = await forecastStock(
-                    product.id,
-                    currentStock,
-                    salesHistory
-                );
-
-                // 5. upsert into restock queue
-                await prisma.restockQueue.upsert({
-                    where: { product_id: product.id },
-                    update: {
-                        priority: forecast.urgency,
-                        recommended_qty: forecast.restock_qty,
-                        days_to_stockout: forecast.days_to_stockout,
-                        resolved: false
-                    },
-                    create: {
-                        product_id: product.id,
-                        priority: forecast.urgency,
-                        recommended_qty: forecast.restock_qty,
-                        days_to_stockout: forecast.days_to_stockout,
-                        reason: `YOLO: ${detection.occupancy_pct}% occupancy. Forecast: ${forecast.days_to_stockout} days left.`
-                    }
-                });
-
-                // 6. emit alert to manager
-                const message = `${product.name} — zone empty. Restock ${forecast.restock_qty} units. Stockout in ${forecast.days_to_stockout} days.`;
-
-                if (detection.status === 'critical') {
-                    emitCriticalAlert(io, shelfId, message, detection.occupancy_pct);
-                } else {
-                    emitWarningAlert(io, shelfId, message, detection.occupancy_pct);
-                }
-            }
+        } else {
+            await prisma.restockQueue.create({
+                data: {
+                    product_id,
+                    priority,
+                    days_to_stockout: parseFloat((hours_until_stockout / 24).toFixed(2)),
+                    recommended_qty,
+                    reason: `AI Forecast: ~${hours_until_stockout.toFixed(1)}h left. Demand: ${predicted_daily_demand.toFixed(1)}/day`,
+                },
+            });
         }
 
-        res.json(detection);
+        // 2. Notification Log: Save to DB for the History tab
+        await prisma.notification.create({
+            data: {
+                type: priority === 'critical' ? 'STOCKOUT_CRITICAL' : 'STOCKOUT_WARNING',
+                message: `${product_name} on ${shelf_id}: Prediction shows stockout in ${hours_until_stockout.toFixed(1)} hours.`,
+                shelf_id,
+            },
+        });
+
+        // 3. THE MAGIC LINK: Emit to the Frontend Hook (Claude's code)
+        if (io) {
+            // This is what the 'useRestockAlerts' hook in React is listening for!
+            io.emit('restock_alert', {
+                product_id,
+                product_name,
+                shelf_id,
+                hours_until_stockout,
+                priority,
+                current_stock,
+                predicted_daily_demand,
+                forecasted_at: forecasted_at || new Date().toISOString(),
+                bbox,
+            });
+        }
+
+        res.json({ success: true, message: "Alert processed and broadcasted" });
     } catch (err) {
-        console.error('Detection error:', err.message);
-        res.status(500).json({ error: 'Detection failed', detail: err.message });
+        console.error('[detect/alert Error]:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
-module.exports = router;
+/**
+ * POST /api/detect/scan/:shelfId
+ * Called by Frontend when you take a photo with your phone.
+ * Triggers the AI Service (FastAPI) to run YOLO + Prophet.
+ */
+router.post('/scan/:shelfId', async (req, res) => {
+    try {
+        const { shelfId } = req.params;
+        const { imageBase64 } = req.body;
+
+        // Fetch current inventory so Prophet knows the starting point
+        const products = await prisma.product.findMany({
+            where: { shelf_id: shelfId },
+            include: { inventory: true },
+        });
+
+        const currentStocks = {};
+        products.forEach(p => {
+            currentStocks[p.id] = p.inventory?.current_stock ?? 0;
+        });
+
+        // Proxy the image to the FastAPI AI Service
+        const FormData = require('form-data');
+        const axios = require('axios');
+        const imageBuffer = Buffer.from(imageBase64, 'base64');
+
+        const form = new FormData();
+        form.append('file', imageBuffer, { filename: 'shelf_scan.jpg', contentType: 'image/jpeg' });
+
+        const aiRes = await axios.post(
+            `${process.env.AI_SERVICE_URL}/detect/${shelfId}?current_stocks=${encodeURIComponent(JSON.stringify(currentStocks))}`,
+            form,
+            { headers: form.getHeaders() }
+        );
+
+        res.json(aiRes.data);
+    } catch (err) {
+        console.error('[detect/scan Error]:', err.message);
+        res.status(500).json({ error: "AI Service unreachable or Scan failed" });
+    }
+});
+
+module.exports = { router, setIO };

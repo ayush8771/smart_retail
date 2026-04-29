@@ -6,7 +6,7 @@ model = YOLO("best.pt")
 
 # 2. Your Phone's IP address (Change this to the one on your phone screen!)
 # IMPORTANT: Add '/video' at the end of the IP
-url = "http://192.168.137.130:8080/video" 
+url = "http://10.81.151.35:8080/video" 
 
 cap = cv2.VideoCapture(video_url)
 
