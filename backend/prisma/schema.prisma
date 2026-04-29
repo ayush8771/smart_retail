@@ -1,15 +1,82 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model Shelf {
+  id           String       @id @default(uuid())
+  name         String
+  camera_url   String?
+  zone_count   Int          @default(12)
+  detections   Detection[]
+  products     Product[]
+  created_at   DateTime     @default(now())
+}
+
+model Product {
+  id             String          @id @default(uuid())
+  name           String
+  category       String
+  shelf_id       String
+  zone_id        String
+  unit           String          @default("units")
+  reorder_level  Int             @default(10)
+  shelf          Shelf           @relation(fields: [shelf_id], references: [id])
+  inventory      Inventory?
+  sales          Sale[]
+  restock_queue  RestockQueue[]
+}
+
+model Inventory {
+  id             String    @id @default(uuid())
+  product_id     String    @unique
+  current_stock  Float     @default(0)
+  last_updated   DateTime  @updatedAt
+  source         String    @default("manual")
+  product        Product   @relation(fields: [product_id], references: [id])
+}
+
+model Detection {
+  id             String    @id @default(uuid())
+  shelf_id       String
+  occupancy_pct  Float
+  empty_zones    Json
+  status         String
+  confidence     Float     @default(0)
+  detected_at    DateTime  @default(now())
+  shelf          Shelf     @relation(fields: [shelf_id], references: [id])
+}
+
+model Sale {
+  id             String    @id @default(uuid())
+  product_id     String
+  quantity_sold  Float
+  price          Float
+  sold_at        DateTime  @default(now())
+  product        Product   @relation(fields: [product_id], references: [id])
+}
+
+model RestockQueue {
+  id                String    @id @default(uuid())
+  product_id        String
+  priority          String    @default("warning")
+  recommended_qty   Int
+  days_to_stockout  Float
+  reason            String?
+  resolved          Boolean   @default(false)
+  created_at        DateTime  @default(now())
+  product           Product   @relation(fields: [product_id], references: [id])
+}
+
+model Notification {
+  id          String    @id @default(uuid())
+  type        String
+  message     String
+  shelf_id    String?
+  read        Boolean   @default(false)
+  created_at  DateTime  @default(now())
 }
