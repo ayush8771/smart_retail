@@ -39,6 +39,7 @@ app.use('/api/shelves', shelvesRoute);
 app.use('/api/detect', detectRouter);
 app.use('/api/restock', restockRoute);
 app.use('/api/analytics', analyticsRoute);
+app.use('/api/wishlist', require('./routes/wishlist'));
 
 // health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

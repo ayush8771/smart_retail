@@ -96,6 +96,7 @@ def run_prophet(product_id, product_name):
         daily_demand = max(float(forecast.iloc[-1]["yhat"]), 0.1)
         hours_until_stockout = current_stock / (daily_demand / 24.0)
 
+        hours_until_stockout = min(hours_until_stockout, 48.0)
         if hours_until_stockout < 6:
             priority = "critical"
         elif hours_until_stockout < 24:
@@ -252,7 +253,7 @@ def run():
 
                 cx_norm = ((x1 + x2) / 2) / w
                 cy_norm = ((y1 + y2) / 2) / h
-                
+
                 product = resolve_product(cx_norm, cy_norm)
                 if not product:
                     continue

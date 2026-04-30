@@ -29,6 +29,7 @@ model Product {
   inventory      Inventory?
   sales          Sale[]
   restock_queue  RestockQueue[]
+  wishlist       Wishlist[]
 }
 
 model Inventory {
@@ -79,4 +80,13 @@ model Notification {
   shelf_id    String?
   read        Boolean   @default(false)
   created_at  DateTime  @default(now())
+}
+
+model Wishlist {
+  id         String   @id @default(uuid())
+  user_name  String   @default("Customer")
+  product_id String
+  product    Product  @relation(fields: [product_id], references: [id])
+  created_at DateTime @default(now())
+  notified   Boolean  @default(false)
 }

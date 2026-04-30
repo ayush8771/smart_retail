@@ -139,6 +139,7 @@ def run_prophet_forecast(product_id: str, current_stock: float) -> dict:
         predicted_daily_demand = max(float(forecast.iloc[-1]["yhat"]), 0.1)
         predicted_hourly_demand = predicted_daily_demand / 24.0
         hours_until_stockout = current_stock / predicted_hourly_demand
+        hours_until_stockout = min(hours_until_stockout, 48.0)
 
         if hours_until_stockout < 6:
             priority = "critical"

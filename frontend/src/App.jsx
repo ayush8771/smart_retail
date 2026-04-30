@@ -4,7 +4,7 @@ import Dashboard from './pages/Dashboard';
 import Shelves from './pages/Shelves';
 import Restock from './pages/Restock';
 import Analytics from './pages/Analytics';
-import Detect from './pages/Detect';
+import Wishlist from './pages/Wishlist';
 
 function App() {
     return (
@@ -14,8 +14,8 @@ function App() {
                     <Route index element={<Dashboard />} />
                     <Route path="shelves" element={<Shelves />} />
                     <Route path="restock" element={<Restock />} />
+                    <Route path="wishlist" element={<Wishlist />} />
                     <Route path="analytics" element={<Analytics />} />
-                    <Route path="detect" element={<Detect />} />
                     <Route path="*" element={<Navigate to="/" />} />
                 </Route>
             </Routes>
