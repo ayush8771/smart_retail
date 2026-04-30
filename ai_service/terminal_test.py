@@ -3,7 +3,7 @@ from ultralytics import YOLO
 from collections import Counter
 
 model = YOLO("best.pt")
-url = "http://10.81.151.35:8080/video" 
+url = "http://10.81.151.149:8080/video" 
 cap = cv2.VideoCapture(url)
 
 history = [] # To store last 10 detections

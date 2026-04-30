@@ -5,9 +5,6 @@ const dotenv = require('dotenv');
 const { Server } = require('socket.io');
 const { PrismaClient } = require('@prisma/client');
 
-// 👇 CHANGE HERE
-const { router: detectRouter, setIO } = require('./routes/detect');
-
 dotenv.config();
 
 const app = express();
@@ -23,19 +20,25 @@ const io = new Server(server, {
 
 // middleware
 app.use(cors({ origin: 'http://localhost:5173' }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// (optional) keep prisma global
 app.set('prisma', prisma);
-
-// 👇 CRITICAL LINE
-setIO(io);
+app.set('io', io);
 
 // routes
-app.use('/api/shelves', require('./routes/shelves'));
-app.use('/api/detect', detectRouter);  // 👈 changed
-app.use('/api/restock', require('./routes/restock'));
-app.use('/api/analytics', require('./routes/analytics'));
+const shelvesRoute = require('./routes/shelves');
+const restockRoute = require('./routes/restock');
+const analyticsRoute = require('./routes/analytics');
+const { router: detectRouter, setIO } = require('./routes/detect');
+
+// inject io into detect router
+setIO(io);
+
+app.use('/api/shelves', shelvesRoute);
+app.use('/api/detect', detectRouter);
+app.use('/api/restock', restockRoute);
+app.use('/api/analytics', analyticsRoute);
 
 // health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

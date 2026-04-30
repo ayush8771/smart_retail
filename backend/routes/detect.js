@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const FormData = require('form-data');
+const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-// io is injected from server.js/app.js to allow real-time broadcasts
 let io;
 const setIO = (socketIO) => {
     io = socketIO;
@@ -11,15 +12,15 @@ const setIO = (socketIO) => {
 
 /**
  * POST /api/detect/alert
- * This is the ENDPOINT the FastAPI (AI Service) calls after running Prophet.
+ * Called by FastAPI after YOLO + Prophet completes.
  */
 router.post('/alert', async (req, res) => {
     const {
-        product_id,           // e.g., 'patanjali_atta_noodles'
+        product_id,
         product_name,
         shelf_id,
-        hours_until_stockout, // From Prophet
-        priority,             // 'critical' or 'warning'
+        hours_until_stockout,
+        priority,
         current_stock,
         predicted_daily_demand,
         forecasted_at,
@@ -27,13 +28,12 @@ router.post('/alert', async (req, res) => {
     } = req.body;
 
     try {
-        // 1. Database Update: Upsert into the Restock Queue
+        const recommended_qty = Math.ceil(predicted_daily_demand * 3);
+
+        // upsert restock queue
         const existing = await prisma.restockQueue.findFirst({
             where: { product_id, resolved: false },
         });
-
-        // Calculate recommended restock quantity (3-day safety buffer)
-        const recommended_qty = Math.ceil(predicted_daily_demand * 3);
 
         if (existing) {
             await prisma.restockQueue.update({
@@ -57,18 +57,17 @@ router.post('/alert', async (req, res) => {
             });
         }
 
-        // 2. Notification Log: Save to DB for the History tab
+        // save notification
         await prisma.notification.create({
             data: {
                 type: priority === 'critical' ? 'STOCKOUT_CRITICAL' : 'STOCKOUT_WARNING',
-                message: `${product_name} on ${shelf_id}: Prediction shows stockout in ${hours_until_stockout.toFixed(1)} hours.`,
+                message: `${product_name} on ${shelf_id}: Stockout in ${hours_until_stockout.toFixed(1)} hours.`,
                 shelf_id,
             },
         });
 
-        // 3. THE MAGIC LINK: Emit to the Frontend Hook (Claude's code)
+        // emit to frontend via WebSocket
         if (io) {
-            // This is what the 'useRestockAlerts' hook in React is listening for!
             io.emit('restock_alert', {
                 product_id,
                 product_name,
@@ -80,9 +79,12 @@ router.post('/alert', async (req, res) => {
                 forecasted_at: forecasted_at || new Date().toISOString(),
                 bbox,
             });
+            console.log(`[SOCKET] Emitted restock_alert for ${product_name} → ${priority.toUpperCase()}`);
+        } else {
+            console.warn('[SOCKET] io not initialized — alert not emitted to frontend');
         }
 
-        res.json({ success: true, message: "Alert processed and broadcasted" });
+        res.json({ success: true, message: 'Alert processed and broadcasted' });
     } catch (err) {
         console.error('[detect/alert Error]:', err);
         res.status(500).json({ error: err.message });
@@ -91,43 +93,67 @@ router.post('/alert', async (req, res) => {
 
 /**
  * POST /api/detect/scan/:shelfId
- * Called by Frontend when you take a photo with your phone.
- * Triggers the AI Service (FastAPI) to run YOLO + Prophet.
+ * Called by frontend or detect_live.py.
+ * Fetches stock from DB → forwards image to FastAPI → returns result.
  */
 router.post('/scan/:shelfId', async (req, res) => {
-    try {
-        const { shelfId } = req.params;
-        const { imageBase64 } = req.body;
+    const { shelfId } = req.params;
+    const { imageBase64 } = req.body;
 
-        // Fetch current inventory so Prophet knows the starting point
+    if (!imageBase64) {
+        return res.status(400).json({ error: 'imageBase64 is required' });
+    }
+
+    const AI_SERVICE_URL = process.env.AI_SERVICE_URL;
+    if (!AI_SERVICE_URL) {
+        console.error('[detect/scan] AI_SERVICE_URL not set in .env');
+        return res.status(500).json({ error: 'AI_SERVICE_URL not configured in backend .env' });
+    }
+
+    try {
+        // fetch current stock for all products on this shelf
         const products = await prisma.product.findMany({
             where: { shelf_id: shelfId },
             include: { inventory: true },
         });
+
+        if (products.length === 0) {
+            console.warn(`[detect/scan] No products found for shelf ${shelfId}`);
+        }
 
         const currentStocks = {};
         products.forEach(p => {
             currentStocks[p.id] = p.inventory?.current_stock ?? 0;
         });
 
-        // Proxy the image to the FastAPI AI Service
-        const FormData = require('form-data');
-        const axios = require('axios');
+        console.log(`[detect/scan] Shelf: ${shelfId} | Products: ${products.length} | Stocks:`, currentStocks);
+
+        // build multipart form with image
         const imageBuffer = Buffer.from(imageBase64, 'base64');
-
         const form = new FormData();
-        form.append('file', imageBuffer, { filename: 'shelf_scan.jpg', contentType: 'image/jpeg' });
+        form.append('file', imageBuffer, {
+            filename: 'shelf_scan.jpg',
+            contentType: 'image/jpeg',
+        });
 
-        const aiRes = await axios.post(
-            `${process.env.AI_SERVICE_URL}/detect/${shelfId}?current_stocks=${encodeURIComponent(JSON.stringify(currentStocks))}`,
-            form,
-            { headers: form.getHeaders() }
-        );
+        const targetUrl = `${AI_SERVICE_URL}/detect/${shelfId}?current_stocks=${encodeURIComponent(JSON.stringify(currentStocks))}`;
+        console.log(`[detect/scan] Forwarding to FastAPI: ${targetUrl}`);
 
+        const aiRes = await axios.post(targetUrl, form, {
+            headers: form.getHeaders(),
+            timeout: 60000, // 60s timeout for YOLO + Prophet
+        });
+
+        console.log(`[detect/scan] FastAPI response → gaps: ${aiRes.data.total_gaps}`);
         res.json(aiRes.data);
+
     } catch (err) {
+        if (err.code === 'ECONNREFUSED') {
+            console.error('[detect/scan] FastAPI is not running on', process.env.AI_SERVICE_URL);
+            return res.status(503).json({ error: 'AI Service is not running. Start FastAPI on port 8000.' });
+        }
         console.error('[detect/scan Error]:', err.message);
-        res.status(500).json({ error: "AI Service unreachable or Scan failed" });
+        res.status(500).json({ error: err.message });
     }
 });
 

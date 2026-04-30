@@ -106,4 +106,35 @@ router.put('/:id', async (req, res) => {
     }
 });
 
+// POST /api/shelves — add new shelf
+router.post('/', async (req, res) => {
+    try {
+        const prisma = req.app.get('prisma');
+        const { id, name } = req.body;
+        if (!id || !name) return res.status(400).json({ error: 'id and name required' });
+        const shelf = await prisma.shelf.create({ data: { id, name, zone_count: 12 } });
+        res.json(shelf);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// PUT /api/shelves/:shelfId — edit shelf name
+router.put('/:shelfId', async (req, res) => {
+    try {
+        const prisma = req.app.get('prisma');
+        const { shelfId } = req.params;
+        const { name } = req.body;
+        const shelf = await prisma.shelf.update({
+            where: { id: shelfId },
+            data: { name }
+        });
+        res.json(shelf);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
