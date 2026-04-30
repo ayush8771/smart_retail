@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import apiClient from '../api';
+
+const socket = io('http://localhost:5000');
 
 const statusColor = (status) => {
     if (status === 'critical') return 'border-red-500 bg-red-50';
@@ -14,6 +17,12 @@ const statusBadge = (status) => {
     return 'bg-emerald-100 text-emerald-700';
 };
 
+const priorityStyle = (priority) => {
+    if (priority === 'critical') return { dot: 'bg-red-500', badge: 'bg-red-100 text-red-700', row: 'border-red-200' };
+    if (priority === 'warning') return { dot: 'bg-amber-400', badge: 'bg-amber-100 text-amber-700', row: 'border-amber-200' };
+    return { dot: 'bg-emerald-400', badge: 'bg-emerald-100 text-emerald-700', row: 'border-gray-100' };
+};
+
 const Dashboard = () => {
     const navigate = useNavigate();
     const [shelves, setShelves] = useState([]);
@@ -21,6 +30,8 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(true);
     const [scanning, setScanning] = useState(false);
     const [scanResult, setScanResult] = useState(null);
+    const [alerts, setAlerts] = useState([]);
+    const [restockList, setRestockList] = useState([]);
 
     const fetchShelves = async () => {
         try {
@@ -41,16 +52,52 @@ const Dashboard = () => {
 
     useEffect(() => {
         fetchShelves();
-        // refresh shelf status every 30s
         const interval = setInterval(fetchShelves, 30000);
-        return () => clearInterval(interval);
+
+        // WebSocket — listen for real-time alerts
+        socket.on('restock_alert', (data) => {
+            // add alert — never auto-dismiss
+            setAlerts(prev => {
+                const exists = prev.find(a => a.product_id === data.product_id);
+                if (exists) {
+                    return prev.map(a => a.product_id === data.product_id ? { ...a, ...data } : a);
+                }
+                return [data, ...prev];
+            });
+
+            // update restock priority list
+            setRestockList(prev => {
+                const filtered = prev.filter(r => r.product_id !== data.product_id);
+                const entry = {
+                    product_id: data.product_id,
+                    product_name: data.product_name,
+                    priority: data.priority,
+                    hours_until_stockout: data.hours_until_stockout,
+                    predicted_daily_demand: data.predicted_daily_demand,
+                    recommended_qty: Math.ceil(data.predicted_daily_demand * 3),
+                };
+                const updated = [entry, ...filtered];
+                updated.sort((a, b) => {
+                    const order = { critical: 0, warning: 1, ok: 2 };
+                    return order[a.priority] - order[b.priority] || a.hours_until_stockout - b.hours_until_stockout;
+                });
+                return updated;
+            });
+
+            // refresh shelf heatmap
+            fetchShelves();
+        });
+
+        return () => {
+            clearInterval(interval);
+            socket.off('restock_alert');
+        };
     }, []);
 
     const handleDemoScan = async () => {
         setScanning(true);
         setScanResult(null);
         try {
-            // fetch the demo shelf image and convert to base64
             const imgRes = await fetch('/shelf_demo.jpg');
             const blob = await imgRes.blob();
             const base64 = await new Promise((resolve) => {
@@ -58,13 +105,8 @@ const Dashboard = () => {
                 reader.onloadend = () => resolve(reader.result.split(',')[1]);
                 reader.readAsDataURL(blob);
             });
-
-            const res = await apiClient.post('/detect/scan/shelf_05', {
-                imageBase64: base64
-            });
-
+            const res = await apiClient.post('/detect/scan/shelf_05', { imageBase64: base64 });
             setScanResult(res.data);
-            // refresh shelves after scan
             await fetchShelves();
         } catch (err) {
             console.error('Demo scan failed:', err);
@@ -91,24 +133,43 @@ const Dashboard = () => {
                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-sm flex items-center gap-2"
                 >
                     {scanning ? (
-                        <>
-                            <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                            Scanning...
-                        </>
-                    ) : (
-                        <>🎯 Demo Scan</>
-                    )}
+                        <><span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>Scanning...</>
+                    ) : <>🎯 Demo Scan</>}
                 </button>
             </div>
 
             {/* Scan Result Banner */}
             {scanResult && (
                 <div className={`p-4 rounded-xl border text-sm font-medium ${scanResult.error ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
-                    {scanResult.error ? (
-                        `❌ ${scanResult.error}`
-                    ) : (
-                        `✅ Scan complete — ${scanResult.total_gaps} gap(s) detected on shelf_05. Alerts pushed to dashboard.`
-                    )}
+                    {scanResult.error ? `❌ ${scanResult.error}` : `✅ Scan complete — ${scanResult.total_gaps} gap(s) detected on shelf_05.`}
+                </div>
+            )}
+
+            {/* Persistent Alert Banner — never vanishes */}
+            {alerts.length > 0 && (
+                <div className="space-y-2">
+                    {alerts.map((alert) => (
+                        <div
+                            key={alert.product_id}
+                            className={`flex items-center justify-between p-4 rounded-xl border font-medium text-sm ${alert.priority === 'critical'
+                                    ? 'bg-red-50 border-red-400 text-red-800'
+                                    : 'bg-amber-50 border-amber-400 text-amber-800'
+                                }`}
+                        >
+                            <span>
+                                {alert.priority === 'critical' ? '🔴' : '🟡'}{' '}
+                                <strong>{alert.product_name}</strong> on {alert.shelf_id} —
+                                Stockout in <strong>{alert.hours_until_stockout?.toFixed(1)}h</strong>.
+                                Demand: {alert.predicted_daily_demand?.toFixed(1)} units/day.
+                            </span>
+                            <button
+                                onClick={() => setAlerts(prev => prev.filter(a => a.product_id !== alert.product_id))}
+                                className="ml-4 text-gray-400 hover:text-gray-600 text-lg font-bold flex-shrink-0"
+                            >
+                                ×
+                            </button>
+                        </div>
+                    ))}
                 </div>
             )}
 
@@ -131,7 +192,7 @@ const Dashboard = () => {
                 </div>
             </div>
 
-            {/* Shelf Heatmap Grid */}
+            {/* Shelf Heatmap */}
             <div>
                 <h3 className="text-lg font-semibold text-gray-700 mb-3">Shelf Status Heatmap</h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -160,6 +221,46 @@ const Dashboard = () => {
                     ))}
                 </div>
             </div>
+
+            {/* Restock Priority List */}
+            {restockList.length > 0 && (
+                <div>
+                    <h3 className="text-lg font-semibold text-gray-700 mb-3">🔁 Restock Priority List</h3>
+                    <div className="space-y-3">
+                        {restockList.map((item, index) => {
+                            const style = priorityStyle(item.priority);
+                            return (
+                                <div
+                                    key={item.product_id}
+                                    className={`bg-white rounded-xl border p-4 flex items-center justify-between gap-4 shadow-sm ${style.row}`}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-gray-400 font-bold text-sm w-5">{index + 1}</span>
+                                        <span className={`h-3 w-3 rounded-full flex-shrink-0 ${style.dot}`}></span>
+                                        <div>
+                                            <p className="font-semibold text-gray-800 capitalize">{item.product_name}</p>
+                                            <p className="text-xs text-gray-400 mt-0.5">
+                                                Demand: {item.predicted_daily_demand?.toFixed(1)} units/day
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="text-right flex-shrink-0">
+                                        <span className={`text-xs px-2 py-0.5 rounded-full font-bold uppercase ${style.badge}`}>
+                                            {item.priority}
+                                        </span>
+                                        <p className="text-sm font-bold text-blue-600 mt-1">
+                                            Reorder: {item.recommended_qty} units
+                                        </p>
+                                        <p className="text-xs text-red-500 font-semibold mt-0.5">
+                                            Stockout in {item.hours_until_stockout?.toFixed(1)}h
+                                        </p>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
