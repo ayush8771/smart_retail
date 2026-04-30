@@ -220,7 +220,7 @@ async def detect_shelf(
 
         if cls_name == "undefined" or cls_name not in known_products:
             # unknown label = gap/empty zone
-           print(f"[GAP] label='{cls_name}' conf={float(box.conf):.2f} cx={cx_norm:.2f} cy={cy_norm:.2f}")
+            print(f"[GAP] label='{cls_name}' conf={float(box.conf):.2f} cx={cx_norm:.2f} cy={cy_norm:.2f}")
 
             product_id = resolve_product_from_bbox(shelf_id, cx_norm, cy_norm)
 
