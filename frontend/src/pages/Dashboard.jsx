@@ -152,8 +152,8 @@ const Dashboard = () => {
                         <div
                             key={alert.product_id}
                             className={`flex items-center justify-between p-4 rounded-xl border font-medium text-sm ${alert.priority === 'critical'
-                                    ? 'bg-red-50 border-red-400 text-red-800'
-                                    : 'bg-amber-50 border-amber-400 text-amber-800'
+                                ? 'bg-red-50 border-red-400 text-red-800'
+                                : 'bg-amber-50 border-amber-400 text-amber-800'
                                 }`}
                         >
                             <span>
@@ -194,7 +194,7 @@ const Dashboard = () => {
 
             {/* Shelf Heatmap */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-3">Shelf Status Heatmap</h3>
+                <h3 className="text-lg font-semibold text-gray-700 mb-3">Shelf Status</h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {shelves.map((shelf) => (
                         <div
